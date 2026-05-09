@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -5,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.database import engine
-from app.core.init_db import init_database
+from app.core.init_db import ingest_initial_corpus, init_database
 
 logging.basicConfig(
     level=logging.INFO,
@@ -15,13 +16,35 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
+async def bootstrap_database() -> None:
+    """Initialise la DB sans bloquer l'ouverture du port Render."""
+    max_attempts = 5
+    for attempt in range(1, max_attempts + 1):
+        try:
+            await init_database()
+            await ingest_initial_corpus()
+            logger.info("✅ Base de données et corpus RAG prêts")
+            return
+        except Exception:
+            logger.exception(
+                "Initialisation DB/RAG échouée (tentative %s/%s)",
+                attempt,
+                max_attempts,
+            )
+            if attempt < max_attempts:
+                await asyncio.sleep(min(5 * attempt, 30))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup : créer les tables et activer pgvector"""
+    """Startup : ouvrir l'API rapidement, puis préparer la DB en arrière-plan."""
     logger.info("🚀 MAÏA backend démarrage...")
-    await init_database()
-    logger.info("✅ Base de données initialisée avec pgvector + index HNSW")
-    yield
+    bootstrap_task = asyncio.create_task(bootstrap_database())
+    try:
+        yield
+    finally:
+        if not bootstrap_task.done():
+            bootstrap_task.cancel()
     logger.info("👋 MAÏA backend arrêt")
     await engine.dispose()
 
