@@ -1,5 +1,4 @@
 from functools import lru_cache
-from typing import Any
 
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings
@@ -10,7 +9,7 @@ class Settings(BaseSettings):
     app_env: str = "development"
     app_host: str = "0.0.0.0"
     app_port: int = 8000
-    cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:5500"]
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:5500"
     frontend_url: str = "http://localhost:3000"
 
     # Database
@@ -40,13 +39,6 @@ class Settings(BaseSettings):
             return v.replace("postgresql://", "postgresql+asyncpg://", 1)
         return v
 
-    @field_validator("cors_origins", mode="before")
-    @classmethod
-    def parse_cors_origins(cls, v: Any) -> list[str]:
-        if isinstance(v, str):
-            return [origin.strip() for origin in v.split(",") if origin.strip()]
-        return v
-
     @model_validator(mode="after")
     def normalize_database_urls(self) -> "Settings":
         if self.database_url.startswith("postgresql://"):
@@ -59,6 +51,13 @@ class Settings(BaseSettings):
             self.database_url_sync = self.database_url_sync.replace("postgresql+asyncpg://", "postgresql://", 1)
 
         return self
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        origins = [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+        if self.frontend_url and self.frontend_url not in origins:
+            origins.append(self.frontend_url)
+        return origins
 
     class Config:
         env_file = ".env"
