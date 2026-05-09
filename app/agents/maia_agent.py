@@ -1,9 +1,8 @@
 """
-Agent MAÏA — Orchestration pydantic-ai
+Agent MAÏA — Orchestration LLM Groq
 Architecture SOLID :
   S — responsabilité unique : orchestration LLM + prompts
   O — extensible : nouveaux verticaux sans modifier le code
-  D — dépend d'abstractions (RAGService injecté)
 """
 import hashlib
 import json
@@ -11,11 +10,7 @@ import logging
 from datetime import datetime, timezone
 from typing import AsyncIterator, Optional
 from groq import AsyncGroq
-from pydantic import BaseModel
-from pydantic_ai import Agent
-from pydantic_ai.models.groq import GroqModel
 from app.core.config import get_settings
-from app.rag.rag_service import RAGService
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -102,7 +97,6 @@ def _cache_key(prompt: str) -> str:
 class MaiaAgent:
     """
     Agent MAÏA — wraps Groq API avec streaming SSE
-    Utilise pydantic-ai pour la validation des sorties structurées
     """
 
     def __init__(self):

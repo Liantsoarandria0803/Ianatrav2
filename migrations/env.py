@@ -13,8 +13,11 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Utiliser DATABASE_URL_SYNC depuis les variables d'environnement
-config.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL_SYNC"])
+# Utiliser DATABASE_URL_SYNC si présent, sinon dériver depuis DATABASE_URL.
+database_url = os.environ.get("DATABASE_URL_SYNC") or os.environ["DATABASE_URL"]
+if database_url.startswith("postgresql+asyncpg://"):
+    database_url = database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+config.set_main_option("sqlalchemy.url", database_url)
 
 target_metadata = Base.metadata
 

@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Any
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -15,7 +15,7 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str
-    database_url_sync: str
+    database_url_sync: str = ""
 
     # JWT
     jwt_secret_key: str
@@ -40,19 +40,25 @@ class Settings(BaseSettings):
             return v.replace("postgresql://", "postgresql+asyncpg://", 1)
         return v
 
-    @field_validator("database_url_sync", mode="before")
-    @classmethod
-    def normalize_sync_database_url(cls, v: str) -> str:
-        if isinstance(v, str) and v.startswith("postgresql+asyncpg://"):
-            return v.replace("postgresql+asyncpg://", "postgresql://", 1)
-        return v
-
     @field_validator("cors_origins", mode="before")
     @classmethod
     def parse_cors_origins(cls, v: Any) -> list[str]:
         if isinstance(v, str):
             return [origin.strip() for origin in v.split(",") if origin.strip()]
         return v
+
+    @model_validator(mode="after")
+    def normalize_database_urls(self) -> "Settings":
+        if self.database_url.startswith("postgresql://"):
+            self.database_url = self.database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+        if not self.database_url_sync:
+            self.database_url_sync = self.database_url
+
+        if self.database_url_sync.startswith("postgresql+asyncpg://"):
+            self.database_url_sync = self.database_url_sync.replace("postgresql+asyncpg://", "postgresql://", 1)
+
+        return self
 
     class Config:
         env_file = ".env"
