@@ -82,6 +82,11 @@ async def root():
     return {"status": "ok", "service": "maia-backend", "api": "/api/v1"}
 
 
+@app.head("/")
+async def root_head():
+    return None
+
+
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "service": "maia-backend", "version": "1.0.0"}

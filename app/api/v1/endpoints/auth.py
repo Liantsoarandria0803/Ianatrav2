@@ -21,7 +21,7 @@ async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
             "token_type": "bearer",
         }
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
 
 @router.post("/login", response_model=TokenResponse)

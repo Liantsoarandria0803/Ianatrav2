@@ -1,5 +1,5 @@
-from datetime import datetime
-from typing import Optional
+from datetime import date, datetime, time, timezone
+from typing import Any, Optional
 from uuid import UUID
 from pydantic import BaseModel, EmailStr, field_validator
 from app.models.models import VerticalEnum, SessionModeEnum, MessageRoleEnum
@@ -14,6 +14,32 @@ class RegisterRequest(BaseModel):
     vertical: VerticalEnum
     exam_date: Optional[datetime] = None
 
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, v: Any) -> Any:
+        return v.strip().lower() if isinstance(v, str) else v
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def normalize_name(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            v = v.strip()
+            return v or None
+        return v
+
+    @field_validator("exam_date", mode="before")
+    @classmethod
+    def parse_exam_date(cls, v: Any) -> Any:
+        if v in ("", None):
+            return None
+        if isinstance(v, datetime):
+            return v
+        if isinstance(v, date):
+            return datetime.combine(v, time.min, tzinfo=timezone.utc)
+        if isinstance(v, str) and len(v) == 10:
+            return datetime.combine(date.fromisoformat(v), time.min, tzinfo=timezone.utc)
+        return v
+
     @field_validator("password")
     @classmethod
     def password_strength(cls, v: str) -> str:
@@ -25,6 +51,11 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, v: Any) -> Any:
+        return v.strip().lower() if isinstance(v, str) else v
 
 
 class TokenResponse(BaseModel):
