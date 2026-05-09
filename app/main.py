@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.router import api_router
+from app.api.v1.endpoints import auth, diagnostic, profile, session
 from app.core.config import get_settings
 from app.core.database import engine
 from app.core.init_db import ingest_initial_corpus, init_database
@@ -67,6 +68,18 @@ app.add_middleware(
 
 # Routes
 app.include_router(api_router)
+
+# Compatibility routes for frontends configured with the backend root URL
+# instead of the versioned API base URL.
+app.include_router(auth.router)
+app.include_router(diagnostic.router)
+app.include_router(session.router)
+app.include_router(profile.router)
+
+
+@app.get("/")
+async def root():
+    return {"status": "ok", "service": "maia-backend", "api": "/api/v1"}
 
 
 @app.get("/health")
