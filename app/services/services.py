@@ -5,16 +5,16 @@ SOLID D : dépend des interfaces repository
 """
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import AsyncIterator
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.maia_agent import maia_agent, build_system_prompt
-from app.models.models import User, Session, Message, MessageRoleEnum, SessionModeEnum
+from app.models.models import User, Session, Message, MessageRoleEnum, SessionModeEnum, DiagnosticSession
 from app.rag.rag_service import RAGService
 from app.repositories.repositories import (
-    UserRepository, SessionRepository, CompetenceRepository
+    UserRepository, SessionRepository, CompetenceRepository, DiagnosticSessionRepository
 )
 from app.schemas.schemas import (
     RegisterRequest, TopicScore, CompetenceResponse
@@ -22,10 +22,6 @@ from app.schemas.schemas import (
 from app.core.security import hash_password, verify_password, create_access_token, create_refresh_token
 
 logger = logging.getLogger(__name__)
-
-# Cache in-memory pour les questions de diagnostic (session courante)
-_diagnostic_cache: dict[str, list[dict]] = {}
-
 
 class AuthService:
     """Responsabilité : authentification et gestion des tokens JWT"""
@@ -61,6 +57,7 @@ class DiagnosticService:
     def __init__(self, db: AsyncSession):
         self._user_repo = UserRepository(db)
         self._comp_repo = CompetenceRepository(db)
+        self._diag_repo = DiagnosticSessionRepository(db)
 
     async def start(self, user_id: UUID) -> dict:
         user = await self._user_repo.get_by_id(user_id)
@@ -72,16 +69,26 @@ class DiagnosticService:
             user_name=user.name or "Candidat",
         )
 
-        # Stocker en cache pour la soumission
-        diagnostic_id = str(uuid.uuid4())
-        _diagnostic_cache[diagnostic_id] = questions
+        diag = DiagnosticSession(
+            user_id=user_id,
+            questions=questions,
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=6),
+        )
+        diag = await self._diag_repo.create(diag)
 
-        return {"diagnostic_id": diagnostic_id, "questions": questions}
+        return {"diagnostic_id": str(diag.id), "questions": questions}
 
     async def submit(self, user_id: UUID, diagnostic_id: str, answers: list[dict]) -> dict:
-        questions = _diagnostic_cache.get(diagnostic_id)
-        if not questions:
+        try:
+            diag_uuid = UUID(diagnostic_id)
+        except Exception:
             raise ValueError("Session de diagnostic introuvable ou expirée")
+
+        diag = await self._diag_repo.get_active_by_id(diag_uuid, user_id)
+        if not diag:
+            raise ValueError("Session de diagnostic introuvable ou expirée")
+
+        questions = diag.questions or []
 
         evaluation = await maia_agent.evaluate_diagnostic_answers(questions, answers)
 
@@ -89,12 +96,17 @@ class DiagnosticService:
         scores = evaluation.get("scores", {})
         topic_scores = []
         for topic, score in scores.items():
-            await self._comp_repo.upsert(user_id, topic, float(score))
-            status = "maîtrisé" if score >= 70 else ("moyen" if score >= 40 else "lacune")
-            topic_scores.append(TopicScore(topic=topic, score=score, status=status))
+            try:
+                numeric_score = float(score)
+            except Exception:
+                numeric_score = 0.0
 
-        # Nettoyer le cache
-        del _diagnostic_cache[diagnostic_id]
+            await self._comp_repo.upsert(user_id, topic, numeric_score)
+            status = "maîtrisé" if numeric_score >= 70 else ("moyen" if numeric_score >= 40 else "lacune")
+            topic_scores.append(TopicScore(topic=topic, score=numeric_score, status=status))
+
+        # Marquer le diagnostic comme consommé (idempotence)
+        await self._diag_repo.consume(diag_uuid, user_id)
 
         strong = [t.topic for t in topic_scores if t.score >= 70]
         weak = [t.topic for t in topic_scores if t.score < 40]

@@ -24,7 +24,13 @@ async def start_session(
 ):
     service = SessionService(db)
     session = await service.start_session(UUID(user_id), req.mode, req.topic)
-    return SessionStartResponse.model_validate(session)
+    # Mapping explicite ORM -> API (évite les soucis d'alias Pydantic avec from_attributes)
+    return SessionStartResponse(
+        session_id=session.id,
+        mode=session.mode,
+        topic=session.topic,
+        started_at=session.started_at,
+    )
 
 
 @router.post("/{session_id}/message")

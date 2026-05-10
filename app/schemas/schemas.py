@@ -1,7 +1,7 @@
 from datetime import date, datetime, time, timezone
 from typing import Any, Optional
 from uuid import UUID
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from app.models.models import VerticalEnum, SessionModeEnum, MessageRoleEnum
 
 
@@ -120,7 +120,8 @@ class SessionStartRequest(BaseModel):
 
 
 class SessionStartResponse(BaseModel):
-    session_id: UUID
+    # ORM attribute is `Session.id`, but the API contract is `session_id`.
+    session_id: UUID = Field(validation_alias="id")
     mode: SessionModeEnum
     topic: Optional[str]
     started_at: datetime

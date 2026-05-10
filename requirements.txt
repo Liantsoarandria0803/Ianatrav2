@@ -19,8 +19,13 @@ python-multipart==0.0.12
 
 # LLM & Embeddings
 groq==0.11.0
-sentence-transformers==3.1.1
-torch==2.4.1
+
+# NOTE: Les embeddings locaux via torch/sentence-transformers sont très lourds
+# (builds longs, RAM élevée). Le backend fonctionne sans, avec fallback RAG
+# par mots-clés (full-text search).
+# Si tu veux réactiver les embeddings vectoriels: ajoute
+#   sentence-transformers==3.1.1
+#   torch==2.4.1
 
 # Cache
 redis==5.1.1

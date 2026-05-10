@@ -10,11 +10,19 @@ RUN apt-get update && apt-get install -y \
 
 # Install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --default-timeout=1000 --retries 10 -r requirements.txt
 
-# Pre-download the embedding model (all-MiniLM-L6-v2) at build time
-# Avoids cold start delays in production
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+# Optional: pre-download the embedding model at build time when the
+# sentence-transformers dependency is installed.
+RUN python - <<'PY'
+try:
+    from sentence_transformers import SentenceTransformer
+
+    SentenceTransformer('all-MiniLM-L6-v2')
+    print('Embedding model cached.')
+except Exception as e:
+    print('Skipping embedding model cache:', e)
+PY
 
 COPY . .
 

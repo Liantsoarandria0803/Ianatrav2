@@ -4,10 +4,10 @@ Principe SOLID D : les services dépendent d'abstractions (Protocol), pas de SQL
 """
 from typing import Protocol, Optional
 from uuid import UUID
-from sqlalchemy import select, update
+from sqlalchemy import select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from app.models.models import User, CompetenceProfile, Session, Message, KnowledgeChunk
+from app.models.models import User, CompetenceProfile, Session, Message, KnowledgeChunk, DiagnosticSession
 
 
 # ── Protocols (interfaces) ────────────────────────────────────────────────────
@@ -28,6 +28,12 @@ class ISessionRepository(Protocol):
 class ICompetenceRepository(Protocol):
     async def get_by_user(self, user_id: UUID) -> list[CompetenceProfile]: ...
     async def upsert(self, user_id: UUID, topic: str, score: float) -> CompetenceProfile: ...
+
+
+class IDiagnosticSessionRepository(Protocol):
+    async def create(self, diag: DiagnosticSession) -> DiagnosticSession: ...
+    async def get_active_by_id(self, diag_id: UUID, user_id: UUID) -> Optional[DiagnosticSession]: ...
+    async def consume(self, diag_id: UUID, user_id: UUID) -> None: ...
 
 
 # ── Implementations ───────────────────────────────────────────────────────────
@@ -113,3 +119,32 @@ class CompetenceRepository:
             self._db.add(profile)
         await self._db.flush()
         return profile
+
+
+class DiagnosticSessionRepository:
+    def __init__(self, db: AsyncSession):
+        self._db = db
+
+    async def create(self, diag: DiagnosticSession) -> DiagnosticSession:
+        self._db.add(diag)
+        await self._db.flush()
+        return diag
+
+    async def get_active_by_id(self, diag_id: UUID, user_id: UUID) -> Optional[DiagnosticSession]:
+        result = await self._db.execute(
+            select(DiagnosticSession)
+            .where(
+                DiagnosticSession.id == diag_id,
+                DiagnosticSession.user_id == user_id,
+                DiagnosticSession.consumed_at.is_(None),
+                (DiagnosticSession.expires_at.is_(None) | (DiagnosticSession.expires_at > func.now())),
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def consume(self, diag_id: UUID, user_id: UUID) -> None:
+        await self._db.execute(
+            update(DiagnosticSession)
+            .where(DiagnosticSession.id == diag_id, DiagnosticSession.user_id == user_id)
+            .values(consumed_at=func.now())
+        )

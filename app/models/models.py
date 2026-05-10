@@ -153,3 +153,30 @@ class KnowledgeChunk(Base):
         Index("ix_chunks_topic_vertical", "topic", "vertical"),
         # L'index HNSW est créé via migration Alembic (SQL brut)
     )
+
+
+class DiagnosticSession(Base):
+    """Session de diagnostic persistée (résiliente aux redémarrages).
+
+    Stocke les questions envoyées à l'utilisateur afin de pouvoir valider la
+    soumission même si le serveur redémarre (cas fréquent sur Render free).
+    """
+
+    __tablename__ = "diagnostic_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    questions: Mapped[list[dict]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        Index("ix_diag_sessions_user_created", "user_id", "created_at"),
+        Index("ix_diag_sessions_expires", "expires_at"),
+    )

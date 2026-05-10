@@ -7,6 +7,7 @@ Architecture SOLID :
 import hashlib
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from typing import AsyncIterator, Optional
 from groq import AsyncGroq
@@ -17,6 +18,46 @@ settings = get_settings()
 
 # Cache in-memory (clé = hash du prompt normalisé → réponse)
 _prompt_cache: dict[str, str] = {}
+_PROMPT_CACHE_MAX = int(os.getenv("MAIA_PROMPT_CACHE_MAX", "128"))
+
+
+def _extract_json_object(content: str) -> dict | None:
+    """Extraction best-effort d'un objet JSON depuis une sortie LLM.
+
+    Certains modèles "reasoning" peuvent préfixer du texte (ex: <think>...) ou
+    encapsuler le JSON dans des fences markdown.
+    """
+    if not content:
+        return None
+
+    text = content.strip()
+
+    # Strip common markdown fences
+    if text.startswith("```"):
+        parts = text.split("\n", 1)
+        text = parts[1] if len(parts) == 2 else ""
+        if text.rstrip().endswith("```"):
+            text = text.rstrip()[: -3].strip()
+
+    # Direct parse
+    try:
+        data = json.loads(text)
+        return data if isinstance(data, dict) else None
+    except json.JSONDecodeError:
+        pass
+
+    # Extract first JSON object from surrounding text
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+
+    candidate = text[start : end + 1]
+    try:
+        data = json.loads(candidate)
+        return data if isinstance(data, dict) else None
+    except json.JSONDecodeError:
+        return None
 
 # ── Vertical configs ──────────────────────────────────────────────────────────
 
@@ -102,6 +143,42 @@ class MaiaAgent:
     def __init__(self):
         self._client = AsyncGroq(api_key=settings.groq_api_key)
 
+    async def _chat_json_object(
+        self,
+        *,
+        messages: list[dict],
+        max_tokens: int,
+        temperature: float,
+    ) -> str:
+        """Demande un JSON object quand supporté, sinon fallback en completion standard."""
+        try:
+            response = await self._client.chat.completions.create(
+                model=settings.groq_model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                response_format={"type": "json_object"},
+            )
+            return response.choices[0].message.content or ""
+        except TypeError:
+            # SDK/provider sans support de response_format
+            response = await self._client.chat.completions.create(
+                model=settings.groq_model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            return response.choices[0].message.content or ""
+        except Exception:
+            logger.warning("Groq JSON mode failed; falling back to plain completion", exc_info=True)
+            response = await self._client.chat.completions.create(
+                model=settings.groq_model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            return response.choices[0].message.content or ""
+
     async def stream_response(
         self,
         user_message: str,
@@ -142,6 +219,10 @@ class MaiaAgent:
 
         # Mettre en cache
         _prompt_cache[cache_key] = full_response
+        if _PROMPT_CACHE_MAX > 0 and len(_prompt_cache) > _PROMPT_CACHE_MAX:
+            # dict préserve l'ordre d'insertion (py3.7+): on évince les plus anciens
+            while len(_prompt_cache) > _PROMPT_CACHE_MAX:
+                _prompt_cache.pop(next(iter(_prompt_cache)))
         logger.info(f"Réponse générée et mise en cache (hash={cache_key[:8]}...)")
 
     async def generate_diagnostic_questions(
@@ -158,6 +239,7 @@ Génère exactement 5 questions de diagnostic pour évaluer les connaissances de
 Couvre ces topics : {vc['programme_summary']}
 
 Réponds UNIQUEMENT en JSON valide, sans markdown, avec ce format exact :
+IMPORTANT : ne retourne aucune balise <think> et aucun texte avant/après le JSON.
 {{
   "questions": [
     {{"id": 1, "topic": "nom_du_topic", "question": "texte de la question", "type": "open"}},
@@ -165,21 +247,20 @@ Réponds UNIQUEMENT en JSON valide, sans markdown, avec ce format exact :
   ]
 }}"""
 
-        response = await self._client.chat.completions.create(
-            model=settings.groq_model,
+        content = await self._chat_json_object(
             messages=[{"role": "user", "content": prompt}],
             max_tokens=800,
-            temperature=0.3,
+            temperature=0.0,
         )
 
-        content = response.choices[0].message.content
-        try:
-            data = json.loads(content)
-            return data["questions"]
-        except (json.JSONDecodeError, KeyError):
-            logger.error(f"Erreur parsing JSON diagnostic : {content[:200]}")
-            # Fallback sur des questions statiques
-            return self._fallback_diagnostic_questions(vertical)
+        data = _extract_json_object(content)
+        questions = data.get("questions") if isinstance(data, dict) else None
+        if isinstance(questions, list) and len(questions) >= 5:
+            return questions[:5]
+
+        logger.error("Erreur parsing JSON diagnostic : %s", (content or "")[:200])
+        # Fallback sur des questions statiques
+        return self._fallback_diagnostic_questions(vertical)
 
     async def evaluate_diagnostic_answers(
         self,
@@ -200,23 +281,24 @@ Pour chaque topic, donne un score de 0 à 100.
 {chr(10).join(qa_pairs)}
 
 Réponds UNIQUEMENT en JSON valide :
+IMPORTANT : ne retourne aucune balise <think> et aucun texte avant/après le JSON.
 {{
   "scores": {{"topic_name": score_number, ...}},
   "summary": "résumé des lacunes en 2 phrases"
 }}"""
 
-        response = await self._client.chat.completions.create(
-            model=settings.groq_model,
+        content = await self._chat_json_object(
             messages=[{"role": "user", "content": prompt}],
             max_tokens=500,
-            temperature=0.1,
+            temperature=0.0,
         )
 
-        content = response.choices[0].message.content
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            return {"scores": {}, "summary": "Évaluation non disponible"}
+        data = _extract_json_object(content)
+        if isinstance(data, dict) and "scores" in data:
+            return data
+
+        logger.error("Erreur parsing JSON évaluation diagnostic : %s", (content or "")[:200])
+        return {"scores": {}, "summary": "Évaluation non disponible"}
 
     async def compress_session(self, messages: list[dict]) -> str:
         """
