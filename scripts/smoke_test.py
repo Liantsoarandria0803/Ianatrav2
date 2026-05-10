@@ -39,6 +39,13 @@ def _normalize_api_base_url(url: str) -> str:
     return base if base.endswith("/api/v1") else f"{base}/api/v1"
 
 
+def _root_url_from_api_base_url(api_base_url: str) -> str:
+    base = (api_base_url or "").rstrip("/")
+    if base.endswith("/api/v1"):
+        return base[: -len("/api/v1")]
+    return base
+
+
 @dataclass(frozen=True)
 class Cfg:
     base_url: str
@@ -138,9 +145,11 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = Cfg(base_url=_normalize_api_base_url(args.base_url), timeout_s=args.timeout, skip_llm=bool(args.skip_llm))
+    root_url = _root_url_from_api_base_url(cfg.base_url)
 
     print("\nMAÏA backend smoke test")
     print(f"- API: {cfg.base_url}")
+    print(f"- root: {root_url}")
     print(f"- timeout: {cfg.timeout_s}s")
     print(f"- skip_llm: {cfg.skip_llm}")
 
@@ -154,7 +163,7 @@ def main() -> None:
     limits = httpx.Limits(max_connections=10, max_keepalive_connections=5)
     with httpx.Client(timeout=cfg.timeout_s, limits=limits, follow_redirects=True) as client:
         # Health
-        _request_json(client, "GET", f"{cfg.base_url}/health", step="health")
+        _request_json(client, "GET", f"{root_url}/health", step="health")
         _ok("health")
 
         # Register
@@ -188,7 +197,6 @@ def main() -> None:
 
         if cfg.skip_llm:
             _ok("diagnostic", "skipped")
-            _ok("session", "skipped")
         else:
             # Diagnostic start
             diag = _request_json(client, "POST", f"{cfg.base_url}/diagnostic/start", headers=headers_auth, json_body={}, step="diagnostic.start")
@@ -213,25 +221,36 @@ def main() -> None:
                 _fail("diagnostic.submit", "scores manquant")
             _ok("diagnostic.submit", f"scores={len(scores)}")
 
-            # Session start
-            sess_payload = {"mode": "cours", "topic": None}
-            sess = _request_json(client, "POST", f"{cfg.base_url}/session/start", headers=headers_auth, json_body=sess_payload, step="session.start")
-            session_id = sess.get("session_id")
-            if not isinstance(session_id, str) or not session_id:
-                _fail("session.start", "session_id manquant")
-            _ok("session.start", f"id={session_id}")
+        # Session start (DB only)
+        sess_payload = {"mode": "cours", "topic": None}
+        sess = _request_json(client, "POST", f"{cfg.base_url}/session/start", headers=headers_auth, json_body=sess_payload, step="session.start")
+        session_id = sess.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            _fail("session.start", "session_id manquant")
+        _ok("session.start", f"id={session_id}")
 
-            # SSE message
+        if cfg.skip_llm:
+            _ok("session.message(SSE)", "skipped")
+        else:
+            # SSE message (LLM)
             sse_url = f"{cfg.base_url}/session/{session_id}/message"
-            reply = _stream_sse_tokens(client, sse_url, headers=headers_auth, payload={"content": "Bonjour MAÏA, réponse courte stp."}, step="session.message(SSE)")
+            reply = _stream_sse_tokens(
+                client,
+                sse_url,
+                headers=headers_auth,
+                payload={"content": "Bonjour MAÏA, réponse courte stp."},
+                step="session.message(SSE)",
+            )
             _ok("session.message(SSE)", f"chars={len(reply)}")
 
-            # History
-            hist = _request_json(client, "GET", f"{cfg.base_url}/session/{session_id}/history", headers=headers_auth, step="session.history")
-            msgs = hist.get("messages")
-            if not isinstance(msgs, list) or len(msgs) < 2:
-                _fail("session.history", f"messages insuffisants: {len(msgs) if isinstance(msgs, list) else 'n/a'}")
-            _ok("session.history", f"messages={len(msgs)}")
+        # History
+        hist = _request_json(client, "GET", f"{cfg.base_url}/session/{session_id}/history", headers=headers_auth, step="session.history")
+        msgs = hist.get("messages")
+        if not isinstance(msgs, list):
+            _fail("session.history", "messages manquant")
+        if not cfg.skip_llm and len(msgs) < 2:
+            _fail("session.history", f"messages insuffisants: {len(msgs)}")
+        _ok("session.history", f"messages={len(msgs)}")
 
         # Profile
         prof = _request_json(client, "GET", f"{cfg.base_url}/profile/competences", headers=headers_auth, step="profile.competences")
