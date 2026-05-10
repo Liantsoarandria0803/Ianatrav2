@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     # Groq (Qwen3-32B)
     groq_api_key: str
     groq_model: str = "qwen/qwen3-32b"
+    groq_timeout_s: float = 20.0
 
     # Embedding
     embedding_model: str = "all-MiniLM-L6-v2"

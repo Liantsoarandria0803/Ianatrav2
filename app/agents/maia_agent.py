@@ -4,6 +4,7 @@ Architecture SOLID :
   S — responsabilité unique : orchestration LLM + prompts
   O — extensible : nouveaux verticaux sans modifier le code
 """
+import asyncio
 import hashlib
 import json
 import logging
@@ -152,32 +153,48 @@ class MaiaAgent:
     ) -> str:
         """Demande un JSON object quand supporté, sinon fallback en completion standard."""
         try:
-            response = await self._client.chat.completions.create(
-                model=settings.groq_model,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                response_format={"type": "json_object"},
+            response = await asyncio.wait_for(
+                self._client.chat.completions.create(
+                    model=settings.groq_model,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    response_format={"type": "json_object"},
+                ),
+                timeout=settings.groq_timeout_s,
             )
             return response.choices[0].message.content or ""
         except TypeError:
             # SDK/provider sans support de response_format
-            response = await self._client.chat.completions.create(
-                model=settings.groq_model,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
+            response = await asyncio.wait_for(
+                self._client.chat.completions.create(
+                    model=settings.groq_model,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                ),
+                timeout=settings.groq_timeout_s,
             )
             return response.choices[0].message.content or ""
+        except asyncio.TimeoutError:
+            logger.warning("Groq request timed out (%ss)", settings.groq_timeout_s)
+            return ""
         except Exception:
             logger.warning("Groq JSON mode failed; falling back to plain completion", exc_info=True)
-            response = await self._client.chat.completions.create(
-                model=settings.groq_model,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
-            return response.choices[0].message.content or ""
+            try:
+                response = await asyncio.wait_for(
+                    self._client.chat.completions.create(
+                        model=settings.groq_model,
+                        messages=messages,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                    ),
+                    timeout=settings.groq_timeout_s,
+                )
+                return response.choices[0].message.content or ""
+            except asyncio.TimeoutError:
+                logger.warning("Groq request timed out (%ss)", settings.groq_timeout_s)
+                return ""
 
     async def stream_response(
         self,
@@ -203,12 +220,15 @@ class MaiaAgent:
         full_response = ""
         total_tokens = 0
 
-        stream = await self._client.chat.completions.create(
-            model=settings.groq_model,
-            messages=messages,
-            max_tokens=1024,
-            temperature=0.7,
-            stream=True,
+        stream = await asyncio.wait_for(
+            self._client.chat.completions.create(
+                model=settings.groq_model,
+                messages=messages,
+                max_tokens=1024,
+                temperature=0.7,
+                stream=True,
+            ),
+            timeout=settings.groq_timeout_s,
         )
 
         async for chunk in stream:
@@ -310,13 +330,19 @@ Inclure : topics abordés, progrès observés, points à retravailler.
 
 {conversation}"""
 
-        response = await self._client.chat.completions.create(
-            model=settings.groq_model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=200,
-            temperature=0.1,
-        )
-        return response.choices[0].message.content
+        try:
+            response = await asyncio.wait_for(
+                self._client.chat.completions.create(
+                    model=settings.groq_model,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=200,
+                    temperature=0.1,
+                ),
+                timeout=settings.groq_timeout_s,
+            )
+            return response.choices[0].message.content
+        except asyncio.TimeoutError:
+            return ""
 
     def _fallback_diagnostic_questions(self, vertical: str) -> list[dict]:
         return [
