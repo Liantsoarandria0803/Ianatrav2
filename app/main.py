@@ -17,6 +17,12 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
+def _is_local_origin(origin: str) -> bool:
+    return origin.startswith("http://localhost") or origin.startswith("https://localhost") or origin.startswith(
+        "http://127.0.0.1"
+    ) or origin.startswith("https://127.0.0.1")
+
+
 async def bootstrap_database() -> None:
     """Initialise la DB sans bloquer l'ouverture du port Render."""
     max_attempts = 5
@@ -58,9 +64,24 @@ app = FastAPI(
 )
 
 # CORS
+cors_origin_regex = (settings.cors_origin_regex or "").strip() or None
+
+# Safe fallback for typical Vercel deployments: if no non-local origin
+# is configured in production, allow *.vercel.app so the UI can reach the API.
+if not cors_origin_regex and settings.app_env.lower() == "production":
+    origins = settings.cors_origin_list
+    has_non_local_origin = any(origin != "*" and not _is_local_origin(origin) for origin in origins)
+    if not has_non_local_origin:
+        cors_origin_regex = r"^https://.*[.]vercel[.]app$"
+
+logger.info("🌐 CORS origins: %s", settings.cors_origin_list)
+if cors_origin_regex:
+    logger.info("🌐 CORS origin regex: %s", cors_origin_regex)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
+    allow_origin_regex=cors_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
