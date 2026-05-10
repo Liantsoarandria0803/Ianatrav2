@@ -47,7 +47,9 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     name: Mapped[Optional[str]] = mapped_column(String(100))
-    vertical: Mapped[VerticalEnum] = mapped_column(Enum(VerticalEnum), nullable=False)
+    # NOTE: Keep the PostgreSQL enum type name stable across environments.
+    # Render DB already has vertical_enum, so we must use the same name here.
+    vertical: Mapped[VerticalEnum] = mapped_column(Enum(VerticalEnum, name="vertical_enum"), nullable=False)
     exam_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -94,7 +96,7 @@ class Session(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    mode: Mapped[SessionModeEnum] = mapped_column(Enum(SessionModeEnum), nullable=False)
+    mode: Mapped[SessionModeEnum] = mapped_column(Enum(SessionModeEnum, name="session_mode_enum"), nullable=False)
     topic: Mapped[Optional[str]] = mapped_column(String(100))
     total_tokens: Mapped[int] = mapped_column(Integer, default=0)
     summary: Mapped[Optional[str]] = mapped_column(Text)  # Résumé compressé LLM
@@ -118,7 +120,7 @@ class Message(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     session_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
-    role: Mapped[MessageRoleEnum] = mapped_column(Enum(MessageRoleEnum), nullable=False)
+    role: Mapped[MessageRoleEnum] = mapped_column(Enum(MessageRoleEnum, name="message_role_enum"), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     tokens_used: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -143,7 +145,7 @@ class KnowledgeChunk(Base):
     chunk_id: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)  # C001, C002...
     topic: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    vertical: Mapped[VerticalEnum] = mapped_column(Enum(VerticalEnum), default=VerticalEnum.concours)
+    vertical: Mapped[VerticalEnum] = mapped_column(Enum(VerticalEnum, name="vertical_enum"), default=VerticalEnum.concours)
     embedding: Mapped[list[float]] = mapped_column(Vector(384))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
