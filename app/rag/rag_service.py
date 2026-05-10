@@ -216,11 +216,11 @@ class RAGService:
                 chunk_id,
                 topic,
                 content,
-                1 - (embedding <=> :embedding::vector) AS similarity
+                1 - (embedding <=> CAST(:embedding AS vector)) AS similarity
             FROM knowledge_chunks
             WHERE embedding IS NOT NULL
             {topic_filter}
-            ORDER BY embedding <=> :embedding::vector
+            ORDER BY embedding <=> CAST(:embedding AS vector)
             LIMIT :top_k
         """
         topic_clause = "AND topic = :topic" if topic_filter else ""
